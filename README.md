@@ -26,12 +26,14 @@ Starting a session requests administrator approval and installs `com.mindless.gu
 - resolves blocked domains into macOS Packet Filter rules, refreshes them as DNS changes, and kills existing connections;
 - applies machine-level `URLBlocklist` policies to Brave, Chrome, and Edge, restoring prior policy files after the final lock expires;
 - keeps browsers and unrelated tabs open while network and policy changes take effect;
-- supports one-time schedules up to 31 days ahead and activates them while the UI is hidden or quit;
+- supports recurring daily, weekday, weekend, and custom-day schedules that run while the UI is hidden or quit;
 - persists if the Mindless UI closes;
 - automatically removes its host entries when time expires;
 - accepts durations from 1 minute through 12 hours.
 
-The interface deliberately provides no early-unlock command or extra confirmation step. Multiple locks can overlap and each appears beneath the clock with its own expiration time. Reusable clusters are stored locally and can contain any mix of applications and websites. To create one, select every target, choose **Save Set**, and give it a name. Saved groups contain only apps and websites. Selecting a group adds it as one grouped row under Targets. Set the dial afterward, then choose **Lock Now**; the group is expanded internally and locked for the dial's current duration. Active lock rows show the exact app and domain targets. Choose **Schedule** to set a one-time future start while retaining the dial duration.
+The main screen deliberately contains only group selection, individual targets, the duration dial, and Lock Now. It provides no early-unlock command or extra confirmation step. Multiple locks can overlap and each appears beneath the clock with its own expiration time and exact targets.
+
+Settings contains recurring schedules, group management, and Ember, Graphite, and Sage themes. Recurring schedules select a saved group, start time, duration, and daily, weekday, weekend, or custom-day recurrence. The root LaunchDaemon evaluates these schedules independently of the UI.
 
 Mindless runs as a macOS menu-bar accessory. Clicking its clock icon toggles the window: click once to show it and again to hide it. On launch or when switching displays, the window follows the display containing the pointer; on the same display it preserves its position. It is available on the current macOS Space. Its context menu also provides Show, Hide, and Quit actions. Quitting the interface never stops active system locks.
 

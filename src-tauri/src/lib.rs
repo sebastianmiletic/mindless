@@ -19,6 +19,15 @@ struct LockRequest {
     start_at: Option<u64>,
 }
 
+#[derive(Deserialize)]
+struct RecurringScheduleRequest {
+    apps: Vec<BlockedApp>,
+    sites: Vec<String>,
+    days: Vec<u8>,
+    start_minute: u16,
+    minutes: u64,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredSession {
     #[serde(default)]
@@ -142,6 +151,36 @@ fn valid_domain(raw: &str) -> Option<String> {
 fn shell_quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\\''")) }
 fn applescript_quote(value: &str) -> String { value.replace('\\', "\\\\").replace('"', "\\\"") }
 
+fn update_system_guard(addition: String, replace_recurring: bool) -> Result<(), String> {
+    let temp = std::env::temp_dir().join(format!("mindless-install-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp);
+    fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+    let script_path = temp.join("mindless-guard.sh");
+    let addition_path = temp.join("guard-addition.conf");
+    let plist_path = temp.join(format!("{LABEL}.plist"));
+    fs::write(&script_path, include_str!("../resources/mindless-guard.sh")).map_err(|e| e.to_string())?;
+    fs::write(&addition_path, addition).map_err(|e| e.to_string())?;
+    fs::write(&plist_path, include_str!("../resources/com.mindless.guard.plist")).map_err(|e| e.to_string())?;
+
+    let merge = if replace_recurring {
+        format!("if [ -f {dir}/guard.conf ]; then /usr/bin/grep -vE '^(RAPP|RPROCESS|RSITE)=' {dir}/guard.conf > {dir}/guard.conf.next || true; else : > {dir}/guard.conf.next; fi; cat {addition} >> {dir}/guard.conf.next", dir = shell_quote(SYSTEM_DIR), addition = shell_quote(&addition_path.to_string_lossy()))
+    } else {
+        format!("if [ -f {dir}/guard.conf ]; then cat {dir}/guard.conf {addition} > {dir}/guard.conf.next; else cat {addition} > {dir}/guard.conf.next; fi", dir = shell_quote(SYSTEM_DIR), addition = shell_quote(&addition_path.to_string_lossy()))
+    };
+    let privileged_script = format!(
+        "mkdir -p {dir}; cp {script} '/Library/PrivilegedHelperTools/com.mindless.guard.sh'; {merge}; mv {dir}/guard.conf.next {dir}/guard.conf; cp {plist} '/Library/LaunchDaemons/{label}.plist'; chown root:wheel '/Library/PrivilegedHelperTools/com.mindless.guard.sh' {dir}/guard.conf '/Library/LaunchDaemons/{label}.plist'; chmod 755 '/Library/PrivilegedHelperTools/com.mindless.guard.sh'; chmod 600 {dir}/guard.conf; chmod 644 '/Library/LaunchDaemons/{label}.plist'; launchctl bootout system/{label} >/dev/null 2>&1 || true; launchctl bootstrap system '/Library/LaunchDaemons/{label}.plist'",
+        dir = shell_quote(SYSTEM_DIR), script = shell_quote(&script_path.to_string_lossy()), merge = merge, plist = shell_quote(&plist_path.to_string_lossy()), label = LABEL
+    );
+    let apple = format!("do shell script \"{}\" with administrator privileges", applescript_quote(&privileged_script));
+    let output = Command::new("osascript").args(["-e", &apple]).output().map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(&temp);
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(if error.contains("User canceled") { "Administrator approval was cancelled.".into() } else { format!("Could not update the system guard: {}", error.trim()) });
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn start_lock(app: AppHandle, request: LockRequest) -> Result<LockState, String> {
     let _operation = START_LOCK.get_or_init(|| Mutex::new(())).lock().map_err(|_| "The lock service is temporarily unavailable.".to_string())?;
@@ -176,27 +215,7 @@ fn start_lock(app: AppHandle, request: LockRequest) -> Result<LockState, String>
     }
     for domain in &domains { addition.push_str(&format!("SITE={start_at}:{ends_at}:{}\n", STANDARD.encode(domain))); }
 
-    let temp = std::env::temp_dir().join(format!("mindless-install-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp);
-    fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
-    let script_path = temp.join("mindless-guard.sh");
-    let addition_path = temp.join("guard-addition.conf");
-    let plist_path = temp.join(format!("{LABEL}.plist"));
-    fs::write(&script_path, include_str!("../resources/mindless-guard.sh")).map_err(|e| e.to_string())?;
-    fs::write(&addition_path, addition).map_err(|e| e.to_string())?;
-    fs::write(&plist_path, include_str!("../resources/com.mindless.guard.plist")).map_err(|e| e.to_string())?;
-
-    let privileged_script = format!(
-        "mkdir -p {dir}; cp {script} '/Library/PrivilegedHelperTools/com.mindless.guard.sh'; if [ -f {dir}/guard.conf ]; then cat {dir}/guard.conf {addition} > {dir}/guard.conf.next; else cat {addition} > {dir}/guard.conf.next; fi; mv {dir}/guard.conf.next {dir}/guard.conf; cp {plist} '/Library/LaunchDaemons/{label}.plist'; chown root:wheel '/Library/PrivilegedHelperTools/com.mindless.guard.sh' {dir}/guard.conf '/Library/LaunchDaemons/{label}.plist'; chmod 755 '/Library/PrivilegedHelperTools/com.mindless.guard.sh'; chmod 600 {dir}/guard.conf; chmod 644 '/Library/LaunchDaemons/{label}.plist'; launchctl bootout system/{label} >/dev/null 2>&1 || true; launchctl bootstrap system '/Library/LaunchDaemons/{label}.plist'",
-        dir = shell_quote(SYSTEM_DIR), script = shell_quote(&script_path.to_string_lossy()), addition = shell_quote(&addition_path.to_string_lossy()), plist = shell_quote(&plist_path.to_string_lossy()), label = LABEL
-    );
-    let apple = format!("do shell script \"{}\" with administrator privileges", applescript_quote(&privileged_script));
-    let output = Command::new("osascript").args(["-e", &apple]).output().map_err(|e| e.to_string())?;
-    let _ = fs::remove_dir_all(&temp);
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        return Err(if error.contains("User canceled") { "Administrator approval was cancelled.".into() } else { format!("Could not update the system guard: {}", error.trim()) });
-    }
+    update_system_guard(addition, false)?;
 
     let mut stored = load_stored(&app)?;
     let targets = request.apps.iter().map(|selected| selected.name.chars().take(80).collect::<String>()).chain(domains.iter().cloned()).collect();
@@ -211,6 +230,36 @@ fn start_lock(app: AppHandle, request: LockRequest) -> Result<LockState, String>
         let _ = fs::rename(next_mirror, mirror);
     }
     Ok(public_state(&stored))
+}
+
+#[tauri::command]
+fn set_recurring_schedules(schedules: Vec<RecurringScheduleRequest>) -> Result<(), String> {
+    let _operation = START_LOCK.get_or_init(|| Mutex::new(())).lock().map_err(|_| "The lock service is temporarily unavailable.".to_string())?;
+    if schedules.len() > 20 { return Err("You can create up to 20 recurring schedules.".into()); }
+    let mut config = String::new();
+    for schedule in schedules {
+        if schedule.apps.len() > 50 || schedule.sites.len() > 50 || schedule.apps.is_empty() && schedule.sites.is_empty() { return Err("Each schedule needs 1 to 100 valid targets.".into()); }
+        if !(1..=720).contains(&schedule.minutes) || schedule.start_minute >= 1440 { return Err("A schedule has an invalid time or duration.".into()); }
+        let mut days = schedule.days;
+        days.sort_unstable(); days.dedup();
+        if days.is_empty() || days.iter().any(|day| !(1..=7).contains(day)) { return Err("Choose at least one valid weekday.".into()); }
+        let day_string: String = days.iter().map(|day| char::from_digit(*day as u32, 10).unwrap()).collect();
+        let mut seen_apps = HashSet::new();
+        for selected in schedule.apps {
+            let executable = executable_for(&selected.path)?;
+            if !seen_apps.insert(executable.clone()) { continue; }
+            config.push_str(&format!("RAPP={day_string}:{}:{}:{}\n", schedule.start_minute, schedule.minutes, STANDARD.encode(&executable)));
+            if let Some(name) = Path::new(&executable).file_name().and_then(|value| value.to_str()) {
+                config.push_str(&format!("RPROCESS={day_string}:{}:{}:{}\n", schedule.start_minute, schedule.minutes, STANDARD.encode(name)));
+            }
+        }
+        let mut seen_sites = HashSet::new();
+        for site in schedule.sites {
+            let domain = valid_domain(&site).ok_or_else(|| format!("Invalid domain: {site}"))?;
+            if seen_sites.insert(domain.clone()) { config.push_str(&format!("RSITE={day_string}:{}:{}:{}\n", schedule.start_minute, schedule.minutes, STANDARD.encode(domain))); }
+        }
+    }
+    update_system_guard(config, true)
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -285,7 +334,7 @@ pub fn run() {
             show_main_window(app.handle());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_lock_state, choose_application, start_lock])
+        .invoke_handler(tauri::generate_handler![get_lock_state, choose_application, start_lock, set_recurring_schedules])
         .run(tauri::generate_context!())
         .expect("error while running Mindless");
 }

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { AppWindow, CalendarClock, FolderPen, Globe2, Info, Layers3, Minus, Pencil, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
+import { AppWindow, CalendarDays, ChevronLeft, FolderPen, Globe2, Info, Layers3, Minus, Palette, Pencil, Plus, Save, Settings2, ShieldCheck, Trash2, X } from "lucide-react";
 
 type BlockedApp = { name: string; path: string };
 type Cluster = { id: string; name: string; apps: BlockedApp[]; sites: string[] };
 type LockSession = { start_at: number; ends_at: number; app_count: number; site_count: number; targets: string[] };
 type LockState = { active: boolean; ends_at: number | null; app_count: number; site_count: number; sessions: LockSession[] };
+type Theme = "ember" | "graphite" | "sage";
+type RecurringSchedule = { id: string; name: string; groupId: string; days: number[]; time: string; minutes: number; enabled: boolean };
 
 const emptyState: LockState = { active: false, ends_at: null, app_count: 0, site_count: 0, sessions: [] };
 const pad = (value: number) => String(value).padStart(2, "0");
@@ -27,11 +29,17 @@ const loadClusters = (): Cluster[] => {
 };
 
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const toLocalDateTime = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-const defaultScheduleTime = () => {
-  const date = new Date(Date.now() + 60 * 60 * 1000);
-  date.setMinutes(Math.ceil(date.getMinutes() / 15) * 15, 0, 0);
-  return toLocalDateTime(date);
+const formatDays = (days: number[]) => days.length === 7 ? "Every day" : days.join("") === "12345" ? "Weekdays" : days.join("") === "67" ? "Weekends" : days.map(day => ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][day]).join(", ");
+const loadSchedules = (): RecurringSchedule[] => {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem("mindless-schedules") ?? "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is RecurringSchedule => !!item && typeof item === "object" && typeof (item as RecurringSchedule).id === "string" && typeof (item as RecurringSchedule).groupId === "string" && Array.isArray((item as RecurringSchedule).days)).slice(0, 20);
+  } catch { return []; }
+};
+const loadTheme = (): Theme => {
+  const value = localStorage.getItem("mindless-theme");
+  return value === "graphite" || value === "sage" ? value : "ember";
 };
 const loadDuration = () => {
   const value = Number(localStorage.getItem("mindless-duration"));
@@ -56,8 +64,16 @@ function App() {
   const [siteInput, setSiteInput] = useState(initialDraft.siteInput);
   const [selectedClusters, setSelectedClusters] = useState<string[]>(initialDraft.selectedClusters);
   const [minutes, setMinutes] = useState(loadDuration);
-  const [scheduleMode, setScheduleMode] = useState(false);
-  const [scheduleAt, setScheduleAt] = useState(() => localStorage.getItem("mindless-schedule-at") ?? defaultScheduleTime());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"schedules" | "groups" | "themes">("schedules");
+  const [theme, setTheme] = useState<Theme>(loadTheme);
+  const [schedules, setSchedules] = useState<RecurringSchedule[]>(loadSchedules);
+  const [scheduleName, setScheduleName] = useState("");
+  const [scheduleGroup, setScheduleGroup] = useState("");
+  const [scheduleDays, setScheduleDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [scheduleTime, setScheduleTime] = useState("09:00");
+  const [scheduleMinutes, setScheduleMinutes] = useState(60);
+  const [editingSchedule, setEditingSchedule] = useState<string | null>(null);
   const [lock, setLock] = useState<LockState>(emptyState);
   const [clusters, setClusters] = useState<Cluster[]>(loadClusters);
   const [clusterName, setClusterName] = useState("");
@@ -79,7 +95,8 @@ function App() {
 
   useEffect(() => { localStorage.setItem("mindless-clusters", JSON.stringify(clusters)); }, [clusters]);
   useEffect(() => { localStorage.setItem("mindless-duration", String(minutes)); }, [minutes]);
-  useEffect(() => { localStorage.setItem("mindless-schedule-at", scheduleAt); }, [scheduleAt]);
+  useEffect(() => { localStorage.setItem("mindless-theme", theme); }, [theme]);
+  useEffect(() => { localStorage.setItem("mindless-schedules", JSON.stringify(schedules)); }, [schedules]);
   useEffect(() => { localStorage.setItem("mindless-draft", JSON.stringify({ apps, sites, siteInput, selectedClusters })); }, [apps, sites, siteInput, selectedClusters]);
   useEffect(() => {
     if (lock.active && lock.ends_at && Math.floor(Date.now() / 1000) >= lock.ends_at) setLock(emptyState);
@@ -144,21 +161,27 @@ function App() {
     setShowClusterEditor(true); setNotice("");
   }
 
-  function saveCluster() {
+  async function saveCluster() {
     const name = clusterName.trim();
     if (!name) return setNotice("Name this cluster first.");
     if (name.length > 32) return setNotice("Cluster names can contain up to 32 characters.");
     if (!editingCluster && clusters.length >= 50) return setNotice("You can save up to 50 clusters.");
     if (resolvedDraft.apps.length + resolvedDraft.sites.length === 0) return setNotice("Add at least one target to the group.");
-    if (editingCluster) {
-      setClusters(clusters.map(item => item.id === editingCluster ? { ...item, name, apps: [...resolvedDraft.apps], sites: [...resolvedDraft.sites] } : item));
-    } else {
-      setClusters([...clusters, { id: createId(), name, apps: [...resolvedDraft.apps], sites: [...resolvedDraft.sites] }]);
-    }
-    setShowClusterEditor(false); setEditingCluster(null); setClusterName(""); setNotice("");
+    const next = editingCluster
+      ? clusters.map(item => item.id === editingCluster ? { ...item, name, apps: [...resolvedDraft.apps], sites: [...resolvedDraft.sites] } : item)
+      : [...clusters, { id: createId(), name, apps: [...resolvedDraft.apps], sites: [...resolvedDraft.sites] }];
+    try {
+      if (editingCluster && schedules.some(schedule => schedule.groupId === editingCluster)) {
+        setBusy(true);
+        await invoke("set_recurring_schedules", { schedules: schedulePayloads(schedules, next) });
+      }
+      setClusters(next); setShowClusterEditor(false); setEditingCluster(null); setClusterName(""); setNotice("");
+    } catch (error) { setNotice(String(error)); }
+    finally { setBusy(false); }
   }
 
   function deleteCluster(id: string) {
+    if (schedules.some(schedule => schedule.groupId === id)) return setNotice("Remove schedules using this group first.");
     if (pendingDelete !== id) { setPendingDelete(id); window.setTimeout(() => setPendingDelete(current => current === id ? null : current), 3000); return; }
     setClusters(clusters.filter(item => item.id !== id)); setSelectedClusters(selectedClusters.filter(clusterId => clusterId !== id)); setPendingDelete(null);
     if (editingCluster === id) { setEditingCluster(null); setShowClusterEditor(false); }
@@ -167,15 +190,49 @@ function App() {
   async function beginLock() {
     if (busy) return;
     if (resolvedDraft.apps.length + resolvedDraft.sites.length === 0) return setNotice("Choose at least one app, website, or group.");
-    const startAt = scheduleMode ? Math.floor(new Date(scheduleAt).getTime() / 1000) : null;
-    if (scheduleMode && (!startAt || startAt < Math.floor(Date.now() / 1000) + 30)) return setNotice("Choose a schedule time at least 30 seconds from now.");
     setBusy(true); setNotice("");
     try {
-      const state = await invoke<LockState>("start_lock", { request: { apps: resolvedDraft.apps, sites: resolvedDraft.sites, minutes, start_at: startAt } });
+      const state = await invoke<LockState>("start_lock", { request: { apps: resolvedDraft.apps, sites: resolvedDraft.sites, minutes } });
       setLock(state); setApps([]); setSites([]); setSelectedClusters([]);
-      if (scheduleMode) { setNotice(`Scheduled for ${new Date(scheduleAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}.`); setScheduleAt(defaultScheduleTime()); }
     } catch (error) { setNotice(String(error)); }
     finally { setBusy(false); }
+  }
+
+  const schedulePayloads = (items: RecurringSchedule[], sourceGroups: Cluster[] = clusters) => items.filter(item => item.enabled).flatMap(item => {
+    const group = sourceGroups.find(cluster => cluster.id === item.groupId);
+    if (!group) return [];
+    const [hour, minute] = item.time.split(":").map(Number);
+    return [{ apps: group.apps, sites: group.sites, days: item.days, start_minute: hour * 60 + minute, minutes: item.minutes }];
+  });
+
+  async function persistSchedules(next: RecurringSchedule[]) {
+    setBusy(true); setNotice("");
+    try {
+      await invoke("set_recurring_schedules", { schedules: schedulePayloads(next) });
+      setSchedules(next);
+    } catch (error) { setNotice(String(error)); throw error; }
+    finally { setBusy(false); }
+  }
+
+  async function saveSchedule() {
+    const group = scheduleGroup || clusters[0]?.id;
+    if (!group) return setNotice("Create a group before adding a schedule.");
+    if (!scheduleDays.length) return setNotice("Choose at least one day.");
+    const item: RecurringSchedule = { id: editingSchedule ?? createId(), name: scheduleName.trim() || clusters.find(entry => entry.id === group)?.name || "Focus", groupId: group, days: [...scheduleDays].sort(), time: scheduleTime, minutes: scheduleMinutes, enabled: true };
+    const next = editingSchedule ? schedules.map(entry => entry.id === editingSchedule ? item : entry) : [...schedules, item];
+    try { await persistSchedules(next); setEditingSchedule(null); setScheduleName(""); setNotice("Schedule saved."); } catch { /* message is already shown */ }
+  }
+
+  function editSchedule(item: RecurringSchedule) {
+    setEditingSchedule(item.id); setScheduleName(item.name); setScheduleGroup(item.groupId); setScheduleDays(item.days); setScheduleTime(item.time); setScheduleMinutes(item.minutes);
+  }
+
+  async function removeSchedule(id: string) {
+    try { await persistSchedules(schedules.filter(item => item.id !== id)); } catch { /* message is already shown */ }
+  }
+
+  async function toggleSchedule(item: RecurringSchedule) {
+    try { await persistSchedules(schedules.map(entry => entry.id === item.id ? { ...entry, enabled: !entry.enabled } : entry)); } catch { /* message is already shown */ }
   }
 
   function beginDialDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -198,25 +255,72 @@ function App() {
 
   const dialStyle = { "--dial-angle": `${(minutes - 15) / 705 * 360}deg` } as CSSProperties;
   const nowEpoch = Math.floor(now.getTime() / 1000);
-  const hasLiveLock = lock.sessions.some(session => !session.start_at || session.start_at <= nowEpoch);
+  const activeRecurring = schedules.filter(schedule => {
+    if (!schedule.enabled) return false;
+    const [hour, minute] = schedule.time.split(":").map(Number);
+    const start = hour * 60 + minute;
+    const currentMinute = now.getHours() * 60 + now.getMinutes();
+    const day = now.getDay() || 7;
+    const end = start + schedule.minutes;
+    if (schedule.days.includes(day) && currentMinute >= start && (end > 1440 || currentMinute < end)) return true;
+    const previousDay = day === 1 ? 7 : day - 1;
+    return end > 1440 && schedule.days.includes(previousDay) && currentMinute < end - 1440;
+  });
+  const hasLiveLock = lock.sessions.some(session => !session.start_at || session.start_at <= nowEpoch) || activeRecurring.length > 0;
+  const hasArmedSchedule = schedules.some(schedule => schedule.enabled);
 
   return (
-    <main className="shell">
+    <main className="shell" data-theme={theme}>
       <header className="topbar" data-tauri-drag-region>
-        <div className="signal" aria-label={hasLiveLock ? "Lock active" : lock.active ? "Lock scheduled" : "Ready"}><i /><i /><i /><i /><i /></div>
-        <div className="wordmark">MINDLESS</div>
-        <div className="status"><span className={lock.active ? "status-dot active" : "status-dot"} />{hasLiveLock ? "LOCKED" : lock.active ? "SCHEDULED" : "READY"}<button className="window-close" title="Hide Mindless" aria-label="Hide Mindless" onClick={() => getCurrentWindow().hide()}><X size={12} /></button></div>
+        <button className="settings-button" onClick={() => setSettingsOpen(open => !open)}>{settingsOpen ? <ChevronLeft size={13} /> : <Settings2 size={13} />}{settingsOpen ? "BACK" : "SETTINGS"}</button>
+        <div className="wordmark">{settingsOpen ? "CONTROL PANEL" : "MINDLESS"}</div>
+        <div className="status"><span className={hasLiveLock || hasArmedSchedule || lock.active ? "status-dot active" : "status-dot"} />{hasLiveLock ? "LOCKED" : hasArmedSchedule ? "ARMED" : lock.active ? "SCHEDULED" : "READY"}<button className="window-close" title="Hide Mindless" aria-label="Hide Mindless" onClick={() => getCurrentWindow().hide()}><X size={12} /></button></div>
       </header>
 
-      <section className="workspace">
-        <aside className={lock.active ? "time-panel has-locks" : "time-panel"}>
+      {settingsOpen ? <section className="settings-view">
+        <nav className="settings-tabs" aria-label="Settings sections">
+          <button className={settingsTab === "schedules" ? "selected" : ""} onClick={() => setSettingsTab("schedules")}><CalendarDays size={13} /> SCHEDULES</button>
+          <button className={settingsTab === "groups" ? "selected" : ""} onClick={() => setSettingsTab("groups")}><Layers3 size={13} /> GROUPS</button>
+          <button className={settingsTab === "themes" ? "selected" : ""} onClick={() => setSettingsTab("themes")}><Palette size={13} /> THEMES</button>
+        </nav>
+
+        {settingsTab === "schedules" && <div className="settings-content schedules-settings">
+          <header><p className="eyebrow">AUTOMATION</p><h1>Recurring schedules</h1><span>Runs through the system guard, even when Mindless is closed.</span></header>
+          <div className="schedule-builder">
+            <div className="settings-field"><label>NAME</label><input maxLength={32} value={scheduleName} onChange={event => setScheduleName(event.target.value)} placeholder="Morning focus" /></div>
+            <div className="settings-field"><label>GROUP</label><select value={scheduleGroup || clusters[0]?.id || ""} onChange={event => setScheduleGroup(event.target.value)}><option value="" disabled>Create a group first</option>{clusters.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></div>
+            <div className="schedule-pair"><div className="settings-field"><label>START</label><input type="time" value={scheduleTime} onChange={event => setScheduleTime(event.target.value)} /></div><div className="settings-field"><label>DURATION</label><select value={scheduleMinutes} onChange={event => setScheduleMinutes(Number(event.target.value))}>{[30, 60, 120, 240, 480, 720].map(value => <option value={value} key={value}>{value < 60 ? `${value} min` : `${value / 60} hr`}</option>)}</select></div></div>
+            <div className="repeat-presets"><button onClick={() => setScheduleDays([1,2,3,4,5,6,7])}>EVERY DAY</button><button onClick={() => setScheduleDays([1,2,3,4,5])}>WEEKDAYS</button><button onClick={() => setScheduleDays([6,7])}>WEEKENDS</button></div>
+            <div className="day-picker">{["M","T","W","T","F","S","S"].map((label, index) => <button key={`${label}-${index}`} className={scheduleDays.includes(index + 1) ? "selected" : ""} onClick={() => setScheduleDays(scheduleDays.includes(index + 1) ? scheduleDays.filter(day => day !== index + 1) : [...scheduleDays, index + 1])}>{label}</button>)}</div>
+            <button className="settings-primary" disabled={busy || !clusters.length} onClick={saveSchedule}><Save size={13} /> {editingSchedule ? "UPDATE SCHEDULE" : "ADD SCHEDULE"}</button>
+          </div>
+          <div className="settings-list">{schedules.length === 0 ? <div className="settings-empty">No recurring schedules</div> : schedules.map(item => <div className={item.enabled ? "schedule-item" : "schedule-item disabled"} key={item.id}><button className="schedule-state" onClick={() => toggleSchedule(item)} aria-label={`${item.enabled ? "Disable" : "Enable"} ${item.name}`}><i /></button><div><strong>{item.name}</strong><span>{item.time} · {formatDays(item.days)} · {clusters.find(group => group.id === item.groupId)?.name ?? "Missing group"}</span></div><button onClick={() => editSchedule(item)} aria-label={`Edit ${item.name}`}><Pencil size={12} /></button><button onClick={() => removeSchedule(item.id)} aria-label={`Delete ${item.name}`}><Trash2 size={12} /></button></div>)}</div>
+        </div>}
+
+        {settingsTab === "groups" && <div className="settings-content groups-settings">
+          <header><p className="eyebrow">REUSABLE TARGETS</p><h1>Groups</h1><span>Select targets on the main screen, then save them here.</span></header>
+          <div className="group-save-bar"><span>{resolvedDraft.apps.length + resolvedDraft.sites.length} selected targets</span><button disabled={!resolvedDraft.apps.length && !resolvedDraft.sites.length} onClick={() => beginCluster()}><Plus size={12} /> SAVE CURRENT</button></div>
+          {showClusterEditor && <div className="settings-name-editor"><input autoFocus maxLength={32} value={clusterName} onChange={event => setClusterName(event.target.value)} placeholder="Group name" onKeyDown={event => event.key === "Enter" && saveCluster()} /><button onClick={saveCluster}><Save size={12} /> SAVE</button><button onClick={() => setShowClusterEditor(false)} aria-label="Cancel"><X size={12} /></button></div>}
+          <div className="settings-list">{clusters.length === 0 ? <div className="settings-empty">No saved groups</div> : clusters.map(group => <div className="group-item" key={group.id}><Layers3 size={14} /><div><strong>{group.name}</strong><span>{group.apps.length} apps · {group.sites.length} websites</span></div><button onClick={() => beginCluster(group)} aria-label={`Edit ${group.name}`}><Pencil size={12} /></button><button onClick={() => deleteCluster(group.id)} aria-label={`Delete ${group.name}`}><Trash2 size={12} /></button></div>)}</div>
+        </div>}
+
+        {settingsTab === "themes" && <div className="settings-content themes-settings">
+          <header><p className="eyebrow">APPEARANCE</p><h1>Theme</h1><span>Choose one restrained accent for the control surface.</span></header>
+          <div className="theme-options">{([{ id: "ember", label: "Ember", color: "#cf582d" }, { id: "graphite", label: "Graphite", color: "#a8a7a2" }, { id: "sage", label: "Sage", color: "#71977c" }] as const).map(option => <button className={theme === option.id ? "selected" : ""} key={option.id} onClick={() => setTheme(option.id)}><i style={{ background: option.color }} /><span>{option.label}</span>{theme === option.id && <small>ACTIVE</small>}</button>)}</div>
+        </div>}
+        {notice && <p className="settings-notice" role="status"><Info size={12} />{notice}</p>}
+      </section> : <section className="workspace">
+        <aside className={lock.active || activeRecurring.length ? "time-panel has-locks" : "time-panel"}>
           <div className="date"><span>{clock.month}</span><strong>{clock.day}</strong></div>
           <div className="time" aria-label={`${clock.hour}:${clock.minute} ${clock.period}`}><span>{clock.hour}</span><span>{clock.minute}</span></div>
           <div className="period">{clock.period}</div>
 
-          {lock.active && <section className="left-locks" aria-label="Active locks">
-            <div className="left-locks-heading"><span><ShieldCheck size={11} /> SESSIONS</span><strong>{pad(lock.sessions.length)}</strong></div>
-            <div className="left-lock-list">{lock.sessions.map((session, index) => {
+          {(lock.active || activeRecurring.length > 0) && <section className="left-locks" aria-label="Active locks">
+            <div className="left-locks-heading"><span><ShieldCheck size={11} /> SESSIONS</span><strong>{pad(lock.sessions.length + activeRecurring.length)}</strong></div>
+            <div className="left-lock-list">{activeRecurring.map((schedule, index) => {
+              const group = clusters.find(item => item.id === schedule.groupId);
+              return <div className="left-lock recurring" key={schedule.id} title={group ? [...group.apps.map(app => app.name), ...group.sites].join(", ") : schedule.name}><div><span>RECUR {pad(index + 1)}</span><small>{group?.name ?? schedule.name}</small></div><strong>{schedule.time}</strong></div>;
+            })}{lock.sessions.map((session, index) => {
               const scheduled = session.start_at > nowEpoch;
               const left = Math.max(0, (scheduled ? session.start_at : session.ends_at) - nowEpoch);
               return <div className={scheduled ? "left-lock scheduled" : "left-lock"} key={`${session.ends_at}-${index}`} title={session.targets.join(", ")}><div><span>{scheduled ? "SCHEDULE" : "LOCK"} {pad(index + 1)}</span><small>{session.targets.length ? session.targets.join(" · ") : `${session.app_count + session.site_count} targets`}</small></div><strong>{scheduled ? "IN " : ""}{pad(Math.floor(left / 3600))}:{pad(Math.floor((left % 3600) / 60))}:{pad(left % 60)}</strong></div>;
@@ -230,16 +334,13 @@ function App() {
         <section className="control-panel">
           <div className="setup-view">
             <div className="cluster-section">
-              <div className="micro-heading"><span><Layers3 size={12} /> GROUPS</span><button disabled={resolvedDraft.apps.length + resolvedDraft.sites.length === 0} onClick={() => beginCluster()}><Plus size={13} /> SAVE SET</button></div>
+              <div className="micro-heading"><span><Layers3 size={12} /> GROUPS</span></div>
               <div className="cluster-rack">
-                {clusters.length === 0 && <div className="cluster-empty"><FolderPen size={14} /> Select targets, then save</div>}
+                {clusters.length === 0 && <button className="cluster-empty" onClick={() => { setSettingsTab("groups"); setSettingsOpen(true); }}><FolderPen size={14} /> Create in Settings</button>}
                 {clusters.map(cluster => <div className={selectedClusters.includes(cluster.id) ? "cluster selected" : "cluster"} key={cluster.id}>
                   <button className="cluster-load" title={`Add ${cluster.name} to Targets`} onClick={() => applyCluster(cluster)}><span>{cluster.name}</span><small>{pad(cluster.apps.length + cluster.sites.length)}</small></button>
-                  <button title={`Edit ${cluster.name}`} aria-label={`Edit ${cluster.name}`} onClick={() => beginCluster(cluster)}><Pencil size={12} /></button>
-                  <button className={pendingDelete === cluster.id ? "delete-confirm" : ""} title={pendingDelete === cluster.id ? "Click again to delete" : `Delete ${cluster.name}`} aria-label={pendingDelete === cluster.id ? `Confirm deletion of ${cluster.name}` : `Delete ${cluster.name}`} onClick={() => deleteCluster(cluster.id)}>{pendingDelete === cluster.id ? <span>?</span> : <Trash2 size={12} />}</button>
                 </div>)}
               </div>
-              {showClusterEditor && <div className="cluster-editor"><input autoFocus maxLength={32} aria-label="Cluster name" placeholder="Cluster name" value={clusterName} onChange={e => setClusterName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") saveCluster(); if (e.key === "Escape") setShowClusterEditor(false); }} /><button onClick={saveCluster}><Save size={13} /> {editingCluster ? "UPDATE" : "SAVE"}</button><button title="Cancel" aria-label="Close cluster editor" onClick={() => setShowClusterEditor(false)}><X size={13} /></button></div>}
             </div>
 
             <div className="section-heading"><div><p className="eyebrow">01 / TARGETS</p><h1>What goes quiet?</h1></div><span>{pad(draftUnitCount)}</span></div>
@@ -269,15 +370,11 @@ function App() {
               </div>
             </div>
 
-            <div className="launch-controls">
-              <div className="launch-mode" aria-label="Lock start mode"><button className={!scheduleMode ? "selected" : ""} onClick={() => setScheduleMode(false)}>NOW</button><button className={scheduleMode ? "selected" : ""} onClick={() => setScheduleMode(true)}><CalendarClock size={11} /> SCHEDULE</button></div>
-              {scheduleMode && <input className="schedule-input" type="datetime-local" value={scheduleAt} min={toLocalDateTime(new Date(Date.now() + 30_000))} max={toLocalDateTime(new Date(Date.now() + 31 * 24 * 60 * 60 * 1000))} onChange={event => setScheduleAt(event.target.value)} aria-label="Schedule start date and time" />}
-            </div>
             {notice && <p className="notice" role="status"><Info size={11} />{notice}</p>}
-            <div className="commit-row"><button className="commit" disabled={busy || resolvedDraft.apps.length + resolvedDraft.sites.length === 0} onClick={beginLock}><span className="commit-mark" />{busy ? "UPDATING GUARD…" : scheduleMode ? "SCHEDULE LOCK" : lock.active ? "ADD LOCK" : "LOCK NOW"}</button></div>
+            <div className="commit-row"><button className="commit" disabled={busy || resolvedDraft.apps.length + resolvedDraft.sites.length === 0} onClick={beginLock}><span className="commit-mark" />{busy ? "UPDATING GUARD…" : lock.active ? "ADD LOCK" : "LOCK NOW"}</button></div>
           </div>
         </section>
-      </section>
+      </section>}
     </main>
   );
 }

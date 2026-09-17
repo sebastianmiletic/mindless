@@ -20,7 +20,7 @@ Use SF Mono for time, durations, counters, and compact labels. Use the macOS sys
 The app is a fixed 580px square with a clean 34px silhouette, no visible outer outline or native window shadow, and restrained internal lighting. Internal panels have 20px radii and thin borders. Buttons use 12px radii, never pills.
 
 ## Layout
-A compact top status rail sits above a two-column workspace. The left time chamber occupies roughly 38% of the width and shows active lock countdowns beneath local time. The right control chamber always remains available for groups, target selection, duration, and a compact Now/Schedule mode.
+A compact top status rail sits above a two-column workspace. The left time chamber occupies roughly 38% of the width and shows active lock countdowns beneath local time. The right control chamber contains only groups, target selection, the duration dial, and Lock Now. Group management, recurring schedules, and themes live behind Settings.
 
 ## Motion
 Transitions last 140–190ms using ease-out-quint. Motion is limited to view-state entry and direct control feedback, using opacity and transforms only. Honor `prefers-reduced-motion`.
@@ -30,7 +30,9 @@ Transitions last 140–190ms using ease-out-quint. Motion is limited to view-sta
 - Groups rack: reusable app and website sets created after selecting targets and naming the set. Selecting a group adds one grouped row to Targets instead of expanding its contents. Lock Now resolves the group and uses the dial's current value.
 - Target rows: selected app or domain, type indicator, and remove control.
 - Duration dial: circular 15-minute-step scrub control. Hold and drag horizontally, left to decrease and right to increase. It also supports the mouse wheel, keyboard range input, and bounded plus/minus controls.
-- Start mode: compact Now/Schedule segmented control with an inline native date-time field for schedules up to 31 days ahead.
-- Commit control: immediate orange lock or schedule action with no intermediate confirmation.
+- Settings: full-width secondary view with Schedules, Groups, and Themes sections.
+- Recurring schedules: named group-based automations supporting every day, weekdays, weekends, or custom day selections.
+- Themes: Ember, Graphite, and Sage token sets with one restrained accent.
+- Commit control: one immediate orange Lock Now action with no intermediate confirmation.
 - Sessions: compact independent rows below local time showing exact targets. Future sessions count down to their start; active sessions count down to release.
 - Menu-bar item: monochrome template icon that toggles window visibility on primary click, with explicit show, hide, and quit context actions.

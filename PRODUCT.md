@@ -8,7 +8,7 @@ product
 Individuals using a personal Mac who want a deliberate, high-friction focus session that blocks distracting applications and websites for a fixed period.
 
 ## Product Purpose
-Mindless lets a user select distracting apps and domains, organize them into reusable editable groups, choose a duration of up to 12 hours, and begin a lock immediately or schedule it up to 31 days ahead. Locks cannot be cancelled from the interface. Multiple sessions can overlap with independent expiration times. Success means each session's chosen distractions remain unavailable until its visible countdown reaches zero.
+Mindless lets a user select distracting apps and domains, organize them into reusable editable groups, choose a duration of up to 12 hours, and begin an immediate lock. Settings provides recurring daily, weekday, weekend, or custom-day schedules backed by the privileged guard. Locks cannot be cancelled from the interface. Multiple sessions can overlap with independent expiration times. Success means each session's chosen distractions remain unavailable until its visible countdown reaches zero.
 
 ## Brand Personality
 Severe, tactile, disciplined. The product should feel like dedicated industrial hardware rather than a colorful wellness app.
