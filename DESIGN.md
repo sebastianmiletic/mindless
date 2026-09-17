@@ -30,9 +30,9 @@ Transitions last 140–190ms using ease-out-quint. Motion is limited to view-sta
 - Groups rack: reusable app and website sets created after selecting targets and naming the set. Selecting a group adds one grouped row to Targets instead of expanding its contents. Lock Now resolves the group and uses the dial's current value.
 - Target rows: selected app or domain, type indicator, and remove control.
 - Duration dial: circular 15-minute-step scrub control. Hold and drag horizontally, left to decrease and right to increase. It also supports the mouse wheel, keyboard range input, and bounded plus/minus controls.
-- Settings: full-width secondary view with Schedules, Groups, and Themes sections.
+- Settings: full-width secondary view with Schedules, Groups, and Themes sections. Groups expose all member apps and domains and support adding, removing, renaming, updating, and deletion.
 - Recurring schedules: named group-based automations supporting every day, weekdays, weekends, or custom day selections.
-- Themes: Ember, Graphite, and Sage token sets with one restrained accent.
+- Themes: Ember, Graphite, Sage, Midnight, Aubergine, and Bronze token sets. Each changes canvas, panel, border, and accent roles rather than swapping only the accent.
 - Commit control: one immediate orange Lock Now action with no intermediate confirmation.
 - Sessions: compact independent rows below local time showing exact targets. Future sessions count down to their start; active sessions count down to release.
 - Menu-bar item: monochrome template icon that toggles window visibility on primary click, with explicit show, hide, and quit context actions.

@@ -7,7 +7,7 @@ type BlockedApp = { name: string; path: string };
 type Cluster = { id: string; name: string; apps: BlockedApp[]; sites: string[] };
 type LockSession = { start_at: number; ends_at: number; app_count: number; site_count: number; targets: string[] };
 type LockState = { active: boolean; ends_at: number | null; app_count: number; site_count: number; sessions: LockSession[] };
-type Theme = "ember" | "graphite" | "sage";
+type Theme = "ember" | "graphite" | "sage" | "midnight" | "aubergine" | "bronze";
 type RecurringSchedule = { id: string; name: string; groupId: string; days: number[]; time: string; minutes: number; enabled: boolean };
 
 const emptyState: LockState = { active: false, ends_at: null, app_count: 0, site_count: 0, sessions: [] };
@@ -39,7 +39,7 @@ const loadSchedules = (): RecurringSchedule[] => {
 };
 const loadTheme = (): Theme => {
   const value = localStorage.getItem("mindless-theme");
-  return value === "graphite" || value === "sage" ? value : "ember";
+  return value === "graphite" || value === "sage" || value === "midnight" || value === "aubergine" || value === "bronze" ? value : "ember";
 };
 const loadDuration = () => {
   const value = Number(localStorage.getItem("mindless-duration"));
@@ -79,6 +79,10 @@ function App() {
   const [clusterName, setClusterName] = useState("");
   const [editingCluster, setEditingCluster] = useState<string | null>(null);
   const [showClusterEditor, setShowClusterEditor] = useState(false);
+  const [groupApps, setGroupApps] = useState<BlockedApp[]>([]);
+  const [groupSites, setGroupSites] = useState<string[]>([]);
+  const [groupSiteInput, setGroupSiteInput] = useState("");
+  const [groupPickerBusy, setGroupPickerBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [appPickerBusy, setAppPickerBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -152,13 +156,30 @@ function App() {
 
   function beginCluster(cluster?: Cluster) {
     if (cluster) {
-      setApps(cluster.apps); setSites(cluster.sites); setSelectedClusters([]); setClusterName(cluster.name);
-      setEditingCluster(cluster.id);
+      setGroupApps([...cluster.apps]); setGroupSites([...cluster.sites]); setClusterName(cluster.name); setEditingCluster(cluster.id);
     } else {
-      if (resolvedDraft.apps.length + resolvedDraft.sites.length === 0) return setNotice("Select apps or websites before saving a group.");
-      setClusterName(""); setEditingCluster(null);
+      if (resolvedDraft.apps.length + resolvedDraft.sites.length === 0) return setNotice("Select apps or websites on the main screen before saving a group.");
+      setGroupApps([...resolvedDraft.apps]); setGroupSites([...resolvedDraft.sites]); setClusterName(""); setEditingCluster(null);
     }
-    setShowClusterEditor(true); setNotice("");
+    setGroupSiteInput(""); setShowClusterEditor(true); setNotice("");
+  }
+
+  async function chooseGroupApp() {
+    if (groupPickerBusy || groupApps.length >= 50) return;
+    setGroupPickerBusy(true); setNotice("");
+    try {
+      const app = await invoke<BlockedApp | null>("choose_application");
+      if (app && !groupApps.some(item => item.path === app.path)) setGroupApps([...groupApps, app]);
+      else if (app) setNotice(`${app.name} is already in this group.`);
+    } catch (error) { setNotice(String(error)); }
+    finally { setGroupPickerBusy(false); }
+  }
+
+  function addGroupSite() {
+    const normalized = groupSiteInput.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].replace(/^www\./, "");
+    if (!normalized || !normalized.includes(".") || !/^[a-z0-9.-]+$/.test(normalized)) return setNotice("Enter a valid domain such as youtube.com.");
+    if (groupSites.includes(normalized)) return setNotice(`${normalized} is already in this group.`);
+    setGroupSites([...groupSites, normalized]); setGroupSiteInput(""); setNotice("");
   }
 
   async function saveCluster() {
@@ -166,16 +187,16 @@ function App() {
     if (!name) return setNotice("Name this cluster first.");
     if (name.length > 32) return setNotice("Cluster names can contain up to 32 characters.");
     if (!editingCluster && clusters.length >= 50) return setNotice("You can save up to 50 clusters.");
-    if (resolvedDraft.apps.length + resolvedDraft.sites.length === 0) return setNotice("Add at least one target to the group.");
+    if (groupApps.length + groupSites.length === 0) return setNotice("Add at least one target to the group.");
     const next = editingCluster
-      ? clusters.map(item => item.id === editingCluster ? { ...item, name, apps: [...resolvedDraft.apps], sites: [...resolvedDraft.sites] } : item)
-      : [...clusters, { id: createId(), name, apps: [...resolvedDraft.apps], sites: [...resolvedDraft.sites] }];
+      ? clusters.map(item => item.id === editingCluster ? { ...item, name, apps: [...groupApps], sites: [...groupSites] } : item)
+      : [...clusters, { id: createId(), name, apps: [...groupApps], sites: [...groupSites] }];
     try {
       if (editingCluster && schedules.some(schedule => schedule.groupId === editingCluster)) {
         setBusy(true);
         await invoke("set_recurring_schedules", { schedules: schedulePayloads(schedules, next) });
       }
-      setClusters(next); setShowClusterEditor(false); setEditingCluster(null); setClusterName(""); setNotice("");
+      setClusters(next); setShowClusterEditor(false); setEditingCluster(null); setClusterName(""); setGroupApps([]); setGroupSites([]); setNotice("");
     } catch (error) { setNotice(String(error)); }
     finally { setBusy(false); }
   }
@@ -300,13 +321,24 @@ function App() {
         {settingsTab === "groups" && <div className="settings-content groups-settings">
           <header><p className="eyebrow">REUSABLE TARGETS</p><h1>Groups</h1><span>Select targets on the main screen, then save them here.</span></header>
           <div className="group-save-bar"><span>{resolvedDraft.apps.length + resolvedDraft.sites.length} selected targets</span><button disabled={!resolvedDraft.apps.length && !resolvedDraft.sites.length} onClick={() => beginCluster()}><Plus size={12} /> SAVE CURRENT</button></div>
-          {showClusterEditor && <div className="settings-name-editor"><input autoFocus maxLength={32} value={clusterName} onChange={event => setClusterName(event.target.value)} placeholder="Group name" onKeyDown={event => event.key === "Enter" && saveCluster()} /><button onClick={saveCluster}><Save size={12} /> SAVE</button><button onClick={() => setShowClusterEditor(false)} aria-label="Cancel"><X size={12} /></button></div>}
-          <div className="settings-list">{clusters.length === 0 ? <div className="settings-empty">No saved groups</div> : clusters.map(group => <div className="group-item" key={group.id}><Layers3 size={14} /><div><strong>{group.name}</strong><span>{group.apps.length} apps · {group.sites.length} websites</span></div><button onClick={() => beginCluster(group)} aria-label={`Edit ${group.name}`}><Pencil size={12} /></button><button onClick={() => deleteCluster(group.id)} aria-label={`Delete ${group.name}`}><Trash2 size={12} /></button></div>)}</div>
+          {showClusterEditor && <div className="group-editor">
+            <div className="settings-name-editor"><input autoFocus maxLength={32} value={clusterName} onChange={event => setClusterName(event.target.value)} placeholder="Group name" onKeyDown={event => event.key === "Enter" && saveCluster()} /><button onClick={saveCluster}><Save size={12} /> SAVE</button><button onClick={() => setShowClusterEditor(false)} aria-label="Cancel"><X size={12} /></button></div>
+            <div className="group-editor-targets">{groupApps.map(app => <div key={app.path}><AppWindow size={12} /><span>{app.name}</span><button onClick={() => setGroupApps(groupApps.filter(item => item.path !== app.path))} aria-label={`Remove ${app.name}`}><X size={11} /></button></div>)}{groupSites.map(site => <div key={site}><Globe2 size={12} /><span>{site}</span><button onClick={() => setGroupSites(groupSites.filter(item => item !== site))} aria-label={`Remove ${site}`}><X size={11} /></button></div>)}{groupApps.length + groupSites.length === 0 && <small>No targets in this group</small>}</div>
+            <div className="group-editor-add"><button disabled={groupPickerBusy} onClick={chooseGroupApp}><Plus size={12} /> {groupPickerBusy ? "CHOOSING…" : "ADD APP"}</button><form onSubmit={event => { event.preventDefault(); addGroupSite(); }}><input value={groupSiteInput} onChange={event => setGroupSiteInput(event.target.value)} placeholder="website.com" autoCapitalize="none" spellCheck={false} /><button type="submit" aria-label="Add website"><Plus size={12} /></button></form></div>
+          </div>}
+          <div className="settings-list">{clusters.length === 0 ? <div className="settings-empty">No saved groups</div> : clusters.map(group => <div className="group-card" key={group.id}><div className="group-item"><Layers3 size={14} /><div><strong>{group.name}</strong><span>{group.apps.length} apps · {group.sites.length} websites</span></div><button onClick={() => beginCluster(group)} aria-label={`Edit ${group.name}`}><Pencil size={12} /></button><button className={pendingDelete === group.id ? "delete-confirm" : ""} onClick={() => deleteCluster(group.id)} aria-label={pendingDelete === group.id ? `Confirm deletion of ${group.name}` : `Delete ${group.name}`}>{pendingDelete === group.id ? <span>?</span> : <Trash2 size={12} />}</button></div><div className="group-members">{group.apps.map(app => <span key={app.path}><AppWindow size={10} />{app.name}</span>)}{group.sites.map(site => <span key={site}><Globe2 size={10} />{site}</span>)}</div></div>)}</div>
         </div>}
 
         {settingsTab === "themes" && <div className="settings-content themes-settings">
           <header><p className="eyebrow">APPEARANCE</p><h1>Theme</h1><span>Choose one restrained accent for the control surface.</span></header>
-          <div className="theme-options">{([{ id: "ember", label: "Ember", color: "#cf582d" }, { id: "graphite", label: "Graphite", color: "#a8a7a2" }, { id: "sage", label: "Sage", color: "#71977c" }] as const).map(option => <button className={theme === option.id ? "selected" : ""} key={option.id} onClick={() => setTheme(option.id)}><i style={{ background: option.color }} /><span>{option.label}</span>{theme === option.id && <small>ACTIVE</small>}</button>)}</div>
+          <div className="theme-options">{([
+            { id: "ember", label: "Ember", color: "#cf582d", surface: "#211d1a" },
+            { id: "graphite", label: "Graphite", color: "#aaa9a4", surface: "#20201f" },
+            { id: "sage", label: "Sage", color: "#71977c", surface: "#18211b" },
+            { id: "midnight", label: "Midnight", color: "#658ba8", surface: "#151d25" },
+            { id: "aubergine", label: "Aubergine", color: "#aa718f", surface: "#241821" },
+            { id: "bronze", label: "Bronze", color: "#b4824e", surface: "#251d16" }
+          ] as const).map(option => <button className={theme === option.id ? "selected" : ""} key={option.id} onClick={() => setTheme(option.id)}><div className="theme-swatch" style={{ background: option.surface }}><i style={{ background: option.color }} /></div><span>{option.label}</span>{theme === option.id && <small>ACTIVE</small>}</button>)}</div>
         </div>}
         {notice && <p className="settings-notice" role="status"><Info size={12} />{notice}</p>}
       </section> : <section className="workspace">

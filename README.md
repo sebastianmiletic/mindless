@@ -34,7 +34,7 @@ Starting a session requests administrator approval and installs `com.mindless.gu
 
 The main screen deliberately contains only group selection, individual targets, the duration dial, and Lock Now. It provides no early-unlock command or extra confirmation step. Multiple locks can overlap and each appears beneath the clock with its own expiration time and exact targets.
 
-Settings contains recurring schedules, group management, and Ember, Graphite, and Sage themes. Recurring schedules select a saved group, start time, duration, and daily, weekday, weekend, or custom-day recurrence. The root LaunchDaemon evaluates these schedules independently of the UI.
+Settings contains recurring schedules, full group management, and Ember, Graphite, Sage, Midnight, Aubergine, and Bronze themes. Group cards expose every included app and website, and the editor supports adding or removing individual targets. Themes change both the complete surface palette and accent color. Recurring schedules select a saved group, start time, duration, and daily, weekday, weekend, or custom-day recurrence. The root LaunchDaemon evaluates these schedules independently of the UI.
 
 Mindless runs as a macOS menu-bar accessory. Clicking its clock icon toggles the window: click once to show it and again to hide it. On launch or when switching displays, the window follows the display containing the pointer; on the same display it preserves its position. It is available on the current macOS Space. Its context menu also provides Show, Hide, and Quit actions. Quitting the interface never stops active system locks.
 
