@@ -215,6 +215,7 @@ fn start_lock(app: AppHandle, request: LockRequest) -> Result<LockState, String>
 
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_always_on_top(true);
         let _ = window.set_visible_on_all_workspaces(true);
         if let (Ok(cursor), Ok(monitors)) = (app.cursor_position(), app.available_monitors()) {
             if let Some(target) = monitors.iter().find(|monitor| {
