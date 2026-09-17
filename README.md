@@ -22,6 +22,7 @@ Debug bundles are currently available under `src-tauri/target/debug/bundle/`.
 Starting a session requests administrator approval and installs `com.mindless.guard` as a root LaunchDaemon. Until the selected deadline it:
 
 - terminates selected app executables once per second using both executable-path and process-name checks;
+- tolerates malformed or nonstandard app property lists and resolves Steam launcher shortcuts to their real game executables;
 - adds IPv4 and IPv6 entries for selected domains to `/etc/hosts` and restores them if changed;
 - resolves blocked domains into macOS Packet Filter rules, refreshes them as DNS changes, and kills existing connections;
 - applies machine-level `URLBlocklist` policies to Brave, Chrome, and Edge, restoring prior policy files after the final lock expires;

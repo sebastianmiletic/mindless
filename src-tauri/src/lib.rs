@@ -128,18 +128,58 @@ async fn choose_application() -> Result<Option<BlockedApp>, String> {
     Ok(Some(BlockedApp { name, path: canonical.to_string_lossy().to_string() }))
 }
 
-fn executable_for(bundle_path: &str) -> Result<String, String> {
-    let canonical = Path::new(bundle_path).canonicalize().map_err(|_| "A selected application no longer exists.".to_string())?;
-    if canonical.extension().and_then(|v| v.to_str()) != Some("app") { return Err("Invalid application selection.".into()); }
-    let value = plist::Value::from_file(canonical.join("Contents/Info.plist")).map_err(|_| "Could not read the selected app bundle.".to_string())?;
-    let dictionary = value.as_dictionary().ok_or("The selected app has an invalid property list.")?;
-    if dictionary.get("CFBundleIdentifier").and_then(|v| v.as_string()) == Some("com.mindless.focus") {
+fn plist_field(info: &Path, key: &str) -> Option<String> {
+    if let Ok(value) = plist::Value::from_file(info) {
+        if let Some(found) = value.as_dictionary().and_then(|dictionary| dictionary.get(key)).and_then(|value| value.as_string()) {
+            return Some(found.to_string());
+        }
+    }
+    let output = Command::new("/usr/bin/plutil").args(["-extract", key, "raw", "-o", "-", &info.to_string_lossy()]).output().ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim_matches(char::from(0)).trim().to_string()).filter(|value| !value.is_empty())
+}
+
+fn direct_bundle_executable(bundle: &Path) -> Result<String, String> {
+    let info = bundle.join("Contents/Info.plist");
+    if plist_field(&info, "CFBundleIdentifier").as_deref() == Some("com.mindless.focus") {
         return Err("Mindless cannot block itself. Close its window instead; active locks continue in the background.".into());
     }
-    let executable = dictionary.get("CFBundleExecutable").and_then(|v| v.as_string()).ok_or("The selected app has no executable.")?;
-    let full = canonical.join("Contents/MacOS").join(executable);
-    if !full.exists() { return Err("The selected app executable was not found.".into()); }
-    Ok(full.to_string_lossy().to_string())
+    let macos = bundle.join("Contents/MacOS");
+    let executable = plist_field(&info, "CFBundleExecutable").map(|name| macos.join(name)).or_else(|| {
+        fs::read_dir(&macos).ok()?.flatten().map(|entry| entry.path()).find(|path| path.is_file())
+    }).ok_or_else(|| format!("{} does not contain a runnable macOS executable.", bundle.file_stem().and_then(|name| name.to_str()).unwrap_or("The selected app")))?;
+    if !executable.exists() { return Err("The selected app executable was not found.".into()); }
+    Ok(executable.to_string_lossy().to_string())
+}
+
+fn find_named_bundle(root: &Path, name: &str, depth: usize) -> Option<PathBuf> {
+    if depth == 0 { return None; }
+    for entry in fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if path.file_name().and_then(|value| value.to_str()) == Some(name) && path.extension().and_then(|value| value.to_str()) == Some("app") { return Some(path); }
+        if path.is_dir() {
+            if let Some(found) = find_named_bundle(&path, name, depth - 1) { return Some(found); }
+        }
+    }
+    None
+}
+
+fn executable_for(bundle_path: &str) -> Result<String, String> {
+    let canonical = Path::new(bundle_path).canonicalize().map_err(|_| "A selected application no longer exists.".to_string())?;
+    if canonical.extension().and_then(|value| value.to_str()) != Some("app") { return Err("Choose a valid macOS application.".into()); }
+    let direct = direct_bundle_executable(&canonical)?;
+
+    // Steam creates tiny launcher bundles in ~/Applications. Resolve those to the
+    // actual game bundle so the long-running game process is blocked, not just the launcher.
+    let is_small_launcher = fs::metadata(&direct).is_ok_and(|metadata| metadata.len() <= 64 * 1024);
+    if is_small_launcher && fs::read_to_string(&direct).is_ok_and(|contents| contents.contains("steam://run/")) {
+        if let (Some(home), Some(bundle_name)) = (std::env::var_os("HOME"), canonical.file_name().and_then(|name| name.to_str())) {
+            let common = PathBuf::from(home).join("Library/Application Support/Steam/steamapps/common");
+            if let Some(actual_bundle) = find_named_bundle(&common, bundle_name, 4) {
+                return direct_bundle_executable(&actual_bundle);
+            }
+        }
+    }
+    Ok(direct)
 }
 
 fn valid_domain(raw: &str) -> Option<String> {
